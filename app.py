@@ -10,7 +10,7 @@ import streamlit as st
 from data_fetcher import fetch_sheet_data, get_sheet_names
 from reports_fetcher import fetch_all_reports, save_report
 from infloww_clientapi import parse_amount
-from infloww_data import get_creator_stats, get_infloww_creators, week_range
+from infloww_data import get_creator_stats, get_creator_stats_30d, get_infloww_creators, week_range
 
 # ── Notes persistence ─────────────────────────────────────────────────────────
 _NOTES_FILE = os.path.join(os.path.dirname(__file__), "fan_notes.json")
@@ -37,10 +37,14 @@ st.set_page_config(
 )
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-_PASSWORD = "FlavaXCuhvet123"
+_MASTER_PASSWORD = "FlavaXCuhvet123"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "master"   # "master" | "creator"
+if "creator_filter" not in st.session_state:
+    st.session_state.creator_filter = None  # base name lowercase, e.g. "poppy"
 
 if not st.session_state.authenticated:
     st.markdown("""
@@ -116,8 +120,15 @@ if not st.session_state.authenticated:
             submitted = st.form_submit_button("Enter", use_container_width=True)
 
         if submitted:
-            if pw == _PASSWORD:
+            if pw == _MASTER_PASSWORD:
                 st.session_state.authenticated = True
+                st.session_state.auth_mode = "master"
+                st.session_state.creator_filter = None
+                st.rerun()
+            elif pw.endswith("123") and len(pw) > 3:
+                st.session_state.authenticated = True
+                st.session_state.auth_mode = "creator"
+                st.session_state.creator_filter = pw[:-3].lower()
                 st.rerun()
             else:
                 st.markdown(
@@ -191,6 +202,27 @@ st.markdown("""
 }
 .refresh-wrap { padding: 0.8rem 0 1.2rem; border-top: 1px solid #1c1c1c; }
 
+/* Global input & textarea styling */
+[data-testid="stTextInput"] > div > div,
+[data-testid="stTextArea"] > div > div {
+    background: #111 !important;
+    border-color: #2a2a2a !important;
+    border-radius: 10px !important;
+}
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: #111 !important;
+    color: #fff !important;
+    caret-color: #fff !important;
+}
+[data-testid="stTextInput"] input::placeholder,
+[data-testid="stTextArea"] textarea::placeholder { color: #444 !important; }
+[data-testid="stTextInput"] > div > div:focus-within,
+[data-testid="stTextArea"] > div > div:focus-within {
+    border-color: #7c4dff !important;
+    box-shadow: 0 0 0 2px rgba(124,77,255,0.2) !important;
+}
+
 [data-testid="stMetric"] {
     background: #0a0a0a; border: 1px solid #1a1a1a;
     border-radius: 16px; padding: 1.2rem 1.6rem;
@@ -204,6 +236,26 @@ st.markdown("""
     margin: 2.4rem 0 1.2rem; display: flex; align-items: center; gap: 1rem;
 }
 .section-header::after { content: ''; flex: 1; height: 1px; background: #222; }
+
+/* Edit Report button */
+.edit-report-btn > button {
+    background: transparent !important;
+    border: 1px solid #2a2a2a !important;
+    color: #444 !important;
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.15em !important;
+    text-transform: uppercase !important;
+    border-radius: 8px !important;
+    padding: 0.35rem 1rem !important;
+    transition: border-color 0.2s, color 0.2s !important;
+    box-shadow: none !important;
+}
+.edit-report-btn > button:hover {
+    border-color: #7c4dff !important;
+    color: #ccc !important;
+    background: transparent !important;
+}
 
 .badge-wrap {
     display: inline-flex; align-items: center; gap: 0.5rem;
@@ -398,45 +450,60 @@ if not creators:
     st.error("Nije moguće učitati creators sa Infloww API-ja.")
     st.stop()
 
-grouped = group_creators(creators)
+grouped = {k: v for k, v in group_creators(creators).items() if k.lower() != "admin"}
+
+# Filter to single creator if logged in as creator
+_cf = st.session_state.creator_filter
+if st.session_state.auth_mode == "creator" and _cf:
+    grouped = {k: v for k, v in grouped.items() if k.lower() == _cf}
+    if not grouped:
+        st.error("Incorrect password — creator not found.")
+        st.session_state.authenticated = False
+        st.stop()
+
 group_names = list(grouped.keys())
 
 if st.session_state.selected_group not in group_names:
     st.session_state.selected_group = group_names[0]
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown('<div class="brand-wrap"><div class="brand-logo">cuhvet</div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-section-label">Creators</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-scroll">', unsafe_allow_html=True)
-    for gname in group_names:
-        is_active = gname == st.session_state.selected_group
-        st.markdown(f'<div class="{"nav-active" if is_active else ""}">', unsafe_allow_html=True)
-        if st.button(gname, key=f"nav_{gname}"):
-            st.session_state.selected_group = gname
+if st.session_state.auth_mode == "master":
+    with st.sidebar:
+        st.markdown('<div class="brand-wrap"><div class="brand-logo">cuhvet</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="nav-section-label">Creators</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-scroll">', unsafe_allow_html=True)
+        for gname in group_names:
+            is_active = gname == st.session_state.selected_group
+            st.markdown(f'<div class="{"nav-active" if is_active else ""}">', unsafe_allow_html=True)
+            if st.button(gname, key=f"nav_{gname}"):
+                st.session_state.selected_group = gname
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="refresh-wrap">', unsafe_allow_html=True)
+        if st.button("↺  Refresh Data", key="refresh"):
+            st.cache_data.clear()
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="refresh-wrap">', unsafe_allow_html=True)
-    if st.button("↺  Refresh Data", key="refresh"):
+else:
+    # Creator mode — hide sidebar, show only refresh
+    st.markdown("<style>[data-testid='stSidebar']{display:none!important}</style>", unsafe_allow_html=True)
+    if st.button("↺  Refresh", key="refresh"):
         st.cache_data.clear()
         st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ── Resolve ───────────────────────────────────────────────────────────────────
 selected_group = st.session_state.selected_group
 members = grouped[selected_group]
 sheet_names = get_sheet_names()
 
-page_sub = "  ·  ".join(f"@{c.get('userName', '')}" for c in members)
 week_offset = st.session_state.week_offset
 
 title_col, week_col = st.columns([3, 1])
 with title_col:
     st.markdown(
-        f'<div class="page-title">{selected_group}</div>'
-        f'<div class="page-sub">{page_sub}</div>',
+        f'<div class="page-title">{selected_group}</div>',
         unsafe_allow_html=True,
     )
 with week_col:
@@ -462,9 +529,10 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
     cid = str(creator.get("id", ""))
     cname = creator.get("name", "")
 
-    # ── Fetch ─────────────────────────────────────────────────────────────────
+    # ── Fetch current + prev week ─────────────────────────────────────────────
     with st.spinner(""):
         tx_sum, ref_sum, raw_txns, trial_links, campaign_links, data_warning = get_creator_stats(cid, week_offset)
+        tx_sum_prev, ref_sum_prev, raw_txns_prev, _, _, _ = get_creator_stats(cid, week_offset + 1)
 
     if data_warning:
         st.warning(data_warning)
@@ -475,11 +543,17 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
     ref_cnt = ref_sum["count"]
     chargeback = (ref_sum["total_amount"] / gross * 100) if gross > 0 else 0.0
 
-    # Sub stats from transactions
-    new_sub_fans   = set(t["fanId"] for t in raw_txns if t.get("type") == "Subscription")
-    renewal_txns   = [t for t in raw_txns if t.get("type") == "RecurringSubscription"]
-    sub_revenue    = tx_sum["by_type"].get("Subscription", {}).get("net", 0) \
-                   + tx_sum["by_type"].get("RecurringSubscription", {}).get("net", 0)
+    gross_prev = tx_sum_prev["total_gross"]
+    net_prev   = tx_sum_prev["total_net"]
+    tx_cnt_prev = tx_sum_prev["count"]
+    ref_cnt_prev = ref_sum_prev["count"]
+    chargeback_prev = (ref_sum_prev["total_amount"] / gross_prev * 100) if gross_prev > 0 else 0.0
+
+    def _pct_change(curr, prev):
+        if prev == 0:
+            return None
+        return (curr - prev) / prev * 100
+
 
     # ── INFLOWW badge ─────────────────────────────────────────────────────────
     ws, we = week_range(week_offset)
@@ -488,7 +562,18 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
     st.markdown(f'<div class="badge-wrap"><span class="dot-purple"></span>Infloww · {period_label} &nbsp;<span style="color:#2a2a2a">{week_label}</span></div>', unsafe_allow_html=True)
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
-    def kpi_card(label: str, value: str, accent: str = "#1e1e1e") -> str:
+    def _delta_html(pct):
+        if pct is None:
+            return ''
+        color = "#69f0ae" if pct >= 0 else "#ff5252"
+        arrow = "▲" if pct >= 0 else "▼"
+        return (
+            f'<div style="color:{color};font-size:0.68rem;font-weight:700;'
+            f'margin-top:0.45rem;letter-spacing:0.05em">'
+            f'{arrow} {abs(pct):.1f}% vs prev week</div>'
+        )
+
+    def kpi_card(label: str, value: str, delta_pct=None, accent: str = "#1e1e1e") -> str:
         return (
             f'<div style="background:#0a0a0a;border:1px solid #1a1a1a;border-top:2px solid {accent};'
             f'border-radius:16px;padding:1.1rem 1.4rem;flex:1;min-width:0">'
@@ -496,17 +581,19 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
             f'letter-spacing:0.18em;margin-bottom:0.5rem;white-space:nowrap">{label}</div>'
             f'<div style="color:#fff;font-size:1.6rem;font-weight:900;font-family:Nunito;'
             f'letter-spacing:-0.01em;line-height:1">{value}</div>'
+            f'{_delta_html(delta_pct)}'
             f'</div>'
         )
 
     chargeback_accent = "#ff5252" if chargeback > 1 else "#1e1e1e"
+
     st.markdown(
         f'<div style="display:flex;gap:0.8rem;margin-bottom:1.5rem">'
-        + kpi_card("Gross Revenue",   fmt_money(gross),          "#7c4dff")
-        + kpi_card("Net Revenue",     fmt_money(net),            "#e040fb")
-        + kpi_card("Transactions",    f"{tx_cnt:,}")
-        + kpi_card("Refunds",         str(ref_cnt))
-        + kpi_card("Refund Rate",     f"{chargeback:.2f}%",      chargeback_accent)
+        + kpi_card("Gross Revenue",  fmt_money(gross),   _pct_change(gross, gross_prev),       "#7c4dff")
+        + kpi_card("Net Revenue",    fmt_money(net),     _pct_change(net, net_prev),            "#e040fb")
+        + kpi_card("Transactions",   f"{tx_cnt:,}",      _pct_change(tx_cnt, tx_cnt_prev))
+        + kpi_card("Refunds",        str(ref_cnt),       _pct_change(ref_cnt, ref_cnt_prev))
+        + kpi_card("Refund Rate",    f"{chargeback:.2f}%", _pct_change(chargeback, chargeback_prev), chargeback_accent)
         + '</div>',
         unsafe_allow_html=True,
     )
@@ -706,63 +793,11 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
         else:
             st.markdown('<div class="empty-state">No daily data</div>', unsafe_allow_html=True)
 
-    # ── Subscriber Stats ──────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">Subscriber Stats</div>', unsafe_allow_html=True)
 
-    # Total subs from trial links
-    total_trial_subs   = sum(int(l.get("subCount", 0) or 0) for l in trial_links)
-    total_paying_fans  = sum(int(l.get("payingFansCount", 0) or 0) for l in trial_links)
-    conversion_rate    = (total_paying_fans / total_trial_subs * 100) if total_trial_subs > 0 else 0.0
 
-    st.markdown(
-        f'<div style="display:flex;gap:0.8rem;margin-bottom:1.5rem">'
-        + kpi_card("New Subs · Week",    str(len(new_sub_fans)),   "#69f0ae")
-        + kpi_card("Renewals · Week",    str(len(renewal_txns)))
-        + kpi_card("Sub Revenue · Week", fmt_money(sub_revenue),   "#00e5ff")
-        + kpi_card("Total Trial Subs",   str(total_trial_subs))
-        + kpi_card("Paying Fans",        f"{total_paying_fans} ({conversion_rate:.0f}%)", "#eeff41")
-        + '</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Campaign Performance ──────────────────────────────────────────────────
-    if campaign_links:
-        st.markdown('<div class="section-header">Campaign Performance</div>', unsafe_allow_html=True)
-
-        sorted_camp = sorted(campaign_links, key=lambda l: int(l.get("subCount", 0) or 0), reverse=True)
-        rows_html = ""
-        for camp in sorted_camp:
-            msg       = (camp.get("message") or "—")[:60] + ("…" if len(camp.get("message") or "") > 60 else "")
-            sub_cnt   = int(camp.get("subCount", 0) or 0)
-            pay_cnt   = int(camp.get("payingFansCount", 0) or 0)
-            earn_net  = cents(camp.get("earningsNet", 0))
-            discount  = camp.get("discount", 0)
-            c_type    = (camp.get("type") or "—").title()
-            status    = "Expired" if camp.get("finishedFlag") else "Active"
-            status_col = "#777" if status == "Expired" else "#4ade80"
-            rows_html += (
-                f"<tr>"
-                f"<td style='color:#888;max-width:300px'>{msg}</td>"
-                f"<td style='color:#aaa'>{c_type}</td>"
-                f"<td style='color:#aaa'>{sub_cnt}</td>"
-                f"<td style='color:#aaa'>{pay_cnt}</td>"
-                f"<td class='amt'>${earn_net:,.2f}</td>"
-                f"<td style='color:#888'>{discount}%</td>"
-                f"<td style='color:{status_col};font-size:0.75rem;font-weight:700'>{status}</td>"
-                f"</tr>"
-            )
-        st.markdown(
-            '<div style="border:1px solid #111;border-radius:12px;overflow:hidden">'
-            '<table class="dark-table"><thead><tr>'
-            "<th>Message</th><th>Type</th><th>Subs</th><th>Paying</th>"
-            "<th>Net Earnings</th><th>Discount</th><th>Status</th>"
-            f"</tr></thead><tbody>{rows_html}</tbody></table></div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Top Fans by Spending (LTV from transactions) ──────────────────────────
+    # ── Top Fans by Spending ──────────────────────────────────────────────────
     if raw_txns:
-        st.markdown('<div class="section-header">Top Spenders · This Week</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">Top Spenders</div>', unsafe_allow_html=True)
 
         fan_map: dict = {}
         for tx in raw_txns:
@@ -824,11 +859,11 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
                     st.markdown(f"**Notes for {fan['name']}**")
                     new_note = st.text_area(
                         "Note", value=existing_note, height=120,
-                        placeholder="Dodaj beleška o ovom spenderu...",
+                        placeholder="Add a note about this spender...",
                         key=f"note_ta_{cid}_{fid}",
                         label_visibility="collapsed",
                     )
-                    if st.button("Sačuvaj", key=f"note_save_{cid}_{fid}", type="primary"):
+                    if st.button("Save", key=f"note_save_{cid}_{fid}", type="primary"):
                         _save_note(cid, fid, new_note)
                         st.success("Sačuvano!")
                         st.rerun()
@@ -945,79 +980,80 @@ def render_creator(creator: dict, week_offset: int = 0, all_reports: dict = None
     executive = rep["executive"]
 
     st.markdown("<hr style='border-color:#111;margin:2.5rem 0'>", unsafe_allow_html=True)
-    st.markdown(
-        '<div class="badge-wrap"><span class="dot-purple"></span>Weekly Reports</div>',
-        unsafe_allow_html=True,
-    )
 
     _edit_key = f"edit_report_{cid}"
     if _edit_key not in st.session_state:
         st.session_state[_edit_key] = False
 
+    _is_master = st.session_state.auth_mode == "master"
+
     # ── View mode ────────────────────────────────────────────────────────────
     if not st.session_state[_edit_key]:
-        def _report_card(title: str, headline: str, body: str, accent: str) -> None:
-            headline_html = (
-                f'<div style="color:#fff;font-size:1.15rem;font-weight:900;line-height:1.3;margin-bottom:1rem">{headline}</div>'
-                if headline else
-                f'<div style="color:#555;font-size:0.85rem;font-style:italic;margin-bottom:1rem">No report yet...</div>'
-            )
-            body_html = "".join(
-                f'<p style="color:#aaa;font-size:0.9rem;line-height:1.7;margin:0 0 0.4rem">{line}</p>'
-                for line in body.split("\n") if line.strip()
-            ) if body else ""
-            st.markdown(
-                f'<div style="background:#0a0a0a;border:1px solid #1a1a1a;border-top:2px solid {accent};'
-                f'border-radius:16px;padding:1.6rem 1.8rem;margin-bottom:1rem">'
-                f'<div style="color:#555;font-size:0.62rem;font-weight:700;text-transform:uppercase;'
-                f'letter-spacing:0.2em;margin-bottom:0.8rem">{title}</div>'
-                f'{headline_html}{body_html}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+        hl   = executive["headline"]
+        body = executive["body"]
 
-        _report_card("Chatters Report",  chatters["headline"], chatters["body"],  "#7c4dff")
-        _report_card("Executive Report", executive["headline"], executive["body"], "#e040fb")
+        body_html = "".join(
+            f'<p style="color:#888;font-size:0.92rem;line-height:1.8;margin:0 0 0.3rem 0">{line}</p>'
+            for line in body.split("\n") if line.strip()
+        ) if body else ""
 
         st.markdown(
-            f'<div style="display:flex;justify-content:flex-end;margin-top:0.5rem">',
+            f'<div style="background:#0a0a0a;border:1px solid #1e1e1e;border-radius:20px;padding:2rem 2.2rem">'
+            f'<div style="color:#7c4dff;font-size:0.6rem;font-weight:800;text-transform:uppercase;'
+            f'letter-spacing:0.25em;margin-bottom:0.75rem">Weekly Report</div>'
+            f'<div style="color:#fff;font-size:1.35rem;font-weight:900;line-height:1.3;margin-bottom:{"1.4rem" if body_html else "0"}">'
+            f'{hl if hl else "<span style=\'color:#333;font-size:0.9rem;font-weight:400;font-style:italic\'>No report yet...</span>"}'
+            f'</div>'
+            f'{"<div style=\'border-top:1px solid #1a1a1a;padding-top:1.2rem\'>" + body_html + "</div>" if body_html else ""}'
+            f'</div>',
             unsafe_allow_html=True,
         )
-        if st.button("✏️ Edit Reports", key=f"edit_btn_{cid}"):
-            st.session_state[_edit_key] = True
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+
+        if _is_master:
+            st.markdown('<div class="edit-report-btn" style="display:flex;justify-content:flex-end;margin-top:0.6rem">', unsafe_allow_html=True)
+            if st.button("Edit Report", key=f"edit_btn_{cid}"):
+                st.session_state[_edit_key] = True
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Edit mode ────────────────────────────────────────────────────────────
     else:
         st.markdown(
-            '<div style="background:#0a0a0a;border:1px solid #222;border-radius:16px;padding:1.6rem 1.8rem;margin-bottom:1rem">',
+            '<div style="background:#0a0a0a;border:1px solid #2a2a2a;border-radius:20px;padding:2rem 2.2rem;margin-bottom:0.8rem">'
+            '<div style="color:#7c4dff;font-size:0.6rem;font-weight:800;text-transform:uppercase;letter-spacing:0.25em;margin-bottom:1.2rem">Weekly Report</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(
-            '<div style="color:#7c4dff;font-size:0.62rem;font-weight:700;text-transform:uppercase;letter-spacing:0.2em;margin-bottom:1rem">Chatters Report</div>',
-            unsafe_allow_html=True,
-        )
-        ch_hl = st.text_input("Headline", value=chatters["headline"], key=f"ch_hl_{cid}", placeholder="Short headline...")
-        ch_bd = st.text_area("Body", value=chatters["body"], key=f"ch_bd_{cid}", placeholder="Detailed report text...", height=120)
+        ex_hl = st.text_input("Headline", value=executive["headline"], key=f"ex_hl_{cid}", placeholder="Short headline...", label_visibility="collapsed")
+        ex_bd = st.text_area("Body", value=executive["body"], key=f"ex_bd_{cid}", placeholder="Report details...", height=200, label_visibility="collapsed")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown(
-            '<div style="background:#0a0a0a;border:1px solid #222;border-radius:16px;padding:1.6rem 1.8rem;margin-bottom:1rem">',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div style="color:#e040fb;font-size:0.62rem;font-weight:700;text-transform:uppercase;letter-spacing:0.2em;margin-bottom:1rem">Executive Report</div>',
-            unsafe_allow_html=True,
-        )
-        ex_hl = st.text_input("Headline", value=executive["headline"], key=f"ex_hl_{cid}", placeholder="Short headline...")
-        ex_bd = st.text_area("Body", value=executive["body"], key=f"ex_bd_{cid}", placeholder="Detailed report text...", height=120)
-        st.markdown("</div>", unsafe_allow_html=True)
+        # Auto-resize textarea via JS
+        st.markdown("""
+        <script>
+        (function() {
+            function autoResize() {
+                document.querySelectorAll('textarea').forEach(function(ta) {
+                    if (!ta._autoResize) {
+                        ta._autoResize = true;
+                        ta.style.overflow = 'hidden';
+                        ta.addEventListener('input', function() {
+                            this.style.height = 'auto';
+                            this.style.height = this.scrollHeight + 'px';
+                        });
+                    }
+                });
+            }
+            const obs = new MutationObserver(autoResize);
+            obs.observe(document.body, { childList: true, subtree: true });
+            autoResize();
+        })();
+        </script>
+        """, unsafe_allow_html=True)
 
-        col_save, col_cancel = st.columns([1, 1])
+        col_save, col_cancel, col_gap = st.columns([1, 1, 3])
         with col_save:
-            if st.button("💾 Save", key=f"save_btn_{cid}", use_container_width=True):
-                ok = save_report(_base, ch_hl, ch_bd, ex_hl, ex_bd)
+            if st.button("💾  Save", key=f"save_btn_{cid}", use_container_width=True):
+                ok = save_report(_base, "", "", ex_hl, ex_bd)
                 if ok:
                     st.session_state[_edit_key] = False
                     st.success("Saved!")

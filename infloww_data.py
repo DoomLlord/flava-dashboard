@@ -27,6 +27,45 @@ def current_week_range() -> tuple[str, str]:
     return week_range(0)
 
 
+def last_30_range() -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return start.strftime(fmt), now.strftime(fmt)
+
+
+@st.cache_data(ttl=3600)
+def get_creator_overall_txns(creator_id: str) -> list:
+    """Vraća sve transakcije od početka (2023-01-01) do sada."""
+    client = InflowwClient(_API_KEY, _AGENCY_OID)
+    start = "2023-01-01T00:00:00Z"
+    end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    txns, _ = client.get_transactions(creator_id, start_time=start, end_time=end)
+    return txns
+
+
+@st.cache_data(ttl=300)
+def get_creator_stats_30d(creator_id: str) -> tuple:
+    client = InflowwClient(_API_KEY, _AGENCY_OID)
+    ws, we = last_30_range()
+
+    txns, txn_hit_limit = client.get_transactions(creator_id, start_time=ws, end_time=we)
+    refunds, _ = client.get_refunds(creator_id, start_time=ws, end_time=we)
+
+    data_warning = None
+    if txn_hit_limit:
+        data_warning = (
+            "⚠️ Podaci za ovog creatora možda nisu tačni — API je vratio maksimalan broj transakcija."
+        )
+
+    return (
+        analyze_transactions(txns),
+        analyze_refunds(refunds),
+        txns,
+        data_warning,
+    )
+
+
 @st.cache_data(ttl=300)
 def get_infloww_creators() -> list:
     client = InflowwClient(_API_KEY, _AGENCY_OID)
